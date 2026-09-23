@@ -1,0 +1,6 @@
+{
+  "name": "SAMCS Simulation Bench - Self-Adaptive Meta-Computing System",
+  "description": "Reproducible computational simulation environment comparing Baseline vs Self-Adaptive Meta-Computing System (SAMCS) under diverse workload conditions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
