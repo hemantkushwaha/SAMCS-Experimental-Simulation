@@ -101,9 +101,39 @@ export function runValidationChecks(
       : 'FAILED: Resource utilization reading out of physical bounds.',
   });
 
-  // Check 6: Adaptation events are logged
+  // Check 6: Adaptation events are logged and mathematically valid
+  let adaptationTriggersValid = true;
+  let invalidTriggerDetail = '';
+
+  for (const ev of experiment.adaptationEvents) {
+    if (ev.system !== 'SAMCS') {
+      adaptationTriggersValid = false;
+      invalidTriggerDetail = `Non-SAMCS system (${ev.system}) logged an adaptation event in Run ${ev.runId}`;
+      break;
+    }
+
+    if (ev.action === 'SCALE_UP') {
+      const wciCondition = ev.wci >= experiment.parameters.wciHighThreshold;
+      const cpuCondition = (ev.previousState.cpuUtil / 100) >= experiment.parameters.cpuHighThreshold;
+      if (!wciCondition && !cpuCondition) {
+        adaptationTriggersValid = false;
+        invalidTriggerDetail = `False trigger in Run ${ev.runId} step ${ev.step}: SCALE_UP recorded with WCI=${ev.wci} (threshold ${experiment.parameters.wciHighThreshold}) and CPU=${ev.previousState.cpuUtil}% (threshold ${experiment.parameters.cpuHighThreshold * 100}%)`;
+        break;
+      }
+    } else if (ev.action === 'SCALE_DOWN') {
+      const wciCondition = ev.wci <= experiment.parameters.wciLowThreshold;
+      const cpuCondition = (ev.previousState.cpuUtil / 100) <= experiment.parameters.cpuLowThreshold;
+      if (!wciCondition || !cpuCondition) {
+        adaptationTriggersValid = false;
+        invalidTriggerDetail = `False trigger in Run ${ev.runId} step ${ev.step}: SCALE_DOWN recorded without satisfying both low thresholds (WCI=${ev.wci}, CPU=${ev.previousState.cpuUtil}%)`;
+        break;
+      }
+    }
+  }
+
   const samcsHasEvents =
     experiment.adaptationEvents.length > 0 &&
+    adaptationTriggersValid &&
     experiment.adaptationEvents.every(
       (ev) =>
         ev.step >= 0 &&
@@ -111,26 +141,34 @@ export function runValidationChecks(
         ev.decision &&
         ev.action &&
         ev.previousState &&
-        ev.updatedState
+        ev.updatedState &&
+        ev.overheadCostSec >= 0
     );
   results.push({
     id: 6,
-    name: 'Adaptation Decision Trace Logging',
+    name: 'Adaptation Decision Trace & Mathematical Trigger Validity',
     passed: samcsHasEvents,
     message: samcsHasEvents
-      ? `Verified: ${experiment.adaptationEvents.length} adaptive actions logged with full pre/post state transitions.`
-      : 'FAILED: Adaptation events missing or malformed.',
+      ? `Verified: ${experiment.adaptationEvents.length} adaptive actions logged; 100% mathematically valid with zero false triggers.`
+      : `FAILED: ${invalidTriggerDetail || 'Adaptation events missing or malformed.'}`,
   });
 
-  // Check 7: Execution time is positive
-  const execTimePositive = experiment.rawRuns.every((r) => r.tExecution > 0);
+  // Check 7: Execution time is positive and overhead non-negative
+  const execTimePositive = experiment.rawRuns.every(
+    (r) => r.tExecution > 0 && r.totalAdaptationOverheadSec >= 0
+  );
+  const baselinePassivity = experiment.rawRuns
+    .filter((r) => r.system === 'BASELINE')
+    .every((r) => r.totalAdaptationOverheadSec === 0 && r.adaptationEventsCount === 0);
+
+  const check7Passed = execTimePositive && baselinePassivity;
   results.push({
     id: 7,
-    name: 'Positive Execution Time Requirement',
-    passed: execTimePositive,
-    message: execTimePositive
-      ? 'Verified: All runs have positive execution times (tExecution > 0).'
-      : 'FAILED: Non-positive execution time detected.',
+    name: 'Positive Execution Time & Baseline Non-Adaptive Fairness',
+    passed: check7Passed,
+    message: check7Passed
+      ? 'Verified: All runs have positive execution times (tExecution > 0), non-negative overhead, and baseline maintains 0 adaptation overhead.'
+      : 'FAILED: Non-positive execution time, negative overhead, or baseline adaptation detected.',
   });
 
   // Check 8: Statistical calculations based on raw observations

@@ -114,12 +114,15 @@ export interface AdaptationEvent {
   step: number;
   simTimeSec: number;
   scenarioId: ScenarioId;
+  system: SystemType;
   runId: number;
   seed: number;
   wci: number;
+  threshold: number;
   currentWorkloadIntensity: number;
   currentResourceAllocation: number;
   decision: string;
+  decisionCondition: string;
   action: AdaptiveActionType;
   previousState: {
     cores: number;
@@ -194,14 +197,18 @@ export interface ScenarioSystemSummary {
 export interface HypothesisTestResult {
   scenarioId: ScenarioId;
   metric: string;
+  sampleSize: number;
   baselineMean: number;
   samcsMean: number;
   percentImprovement: number;
   testName: string;
   testStatistic: number;
   pValue: number;
+  pValueFormatted: string;
   degreesOfFreedom: number;
   cohensD: number;
+  ci95DiffLow: number;
+  ci95DiffHigh: number;
   isSignificant: boolean;
 }
 

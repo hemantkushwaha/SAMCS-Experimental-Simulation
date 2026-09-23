@@ -1,0 +1,10 @@
+scenario_id,metric_name,baseline_mean,samcs_mean,percent_delta,test_type,test_statistic_t,degrees_of_freedom,p_value,cohens_d_effect_size,statistically_significant_at_alpha_0_05
+S1,Execution Time (s),60.5667,68.9752,-13.88,Paired Two-Tailed Student's t-test,-1642.2502,29,0.000001,4.464,TRUE
+S1,Computational Efficiency (Tasks / Core-Sec),624.7263,178.3047,-71.46,Paired Two-Tailed Student's t-test,183.457,29,0.000001,30.462,TRUE
+S1,Mean CPU Utilization (%),14.3333,6.0067,58.09,Paired Two-Tailed Student's t-test,101.3268,29,0.000001,19.903,TRUE
+S2,Execution Time (s),60.5333,69.5413,-14.88,Paired Two-Tailed Student's t-test,-3510.0289,29,0.000001,9.541,TRUE
+S2,Computational Efficiency (Tasks / Core-Sec),1873.6428,534.689,-71.46,Paired Two-Tailed Student's t-test,411.6864,29,0.000001,67.912,TRUE
+S2,Mean CPU Utilization (%),42.8483,14.1957,66.87,Paired Two-Tailed Student's t-test,398.9943,29,0.000001,52.178,TRUE
+S3,Execution Time (s),80.4,89.706,-11.57,Paired Two-Tailed Student's t-test,-3508.7059,29,0.000001,9.537,TRUE
+S3,Computational Efficiency (Tasks / Core-Sec),1255.4479,346.1612,-72.43,Paired Two-Tailed Student's t-test,548.8753,29,0.000001,94.735,TRUE
+S3,Mean CPU Utilization (%),28.7073,8.5187,70.33,Paired Two-Tailed Student's t-test,521.7999,29,0.000001,69.481,TRUE

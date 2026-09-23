@@ -104,29 +104,31 @@ export class SimulationEngine {
       pendingQueueTasks -= processedTasks;
       completedTasks += processedTasks;
 
-      // CPU Utilization: ratio of processed demand to nominal capacity
+      // CPU Utilization: ratio of processed demand to nominal capacity (normalized fraction [0.0..1.0])
       const rawCpuRatio = processedTasks / Math.max(1, nominalStepCapacity);
       const cpuLoadPressure = pendingQueueTasks > 50 ? 0.15 : 0.0;
-      const cpuUtil = Math.max(
-        5.0,
-        Math.min(100.0, (rawCpuRatio * 0.85 + cpuLoadPressure + rng.nextGaussian(0, 0.02)) * 100)
+      const cpuFraction = Math.max(
+        0.05,
+        Math.min(1.0, rawCpuRatio * 0.85 + cpuLoadPressure + rng.nextGaussian(0, 0.02))
       );
+      const cpuUtil = Number((cpuFraction * 100).toFixed(2));
 
-      // Memory Utilization
+      // Memory Utilization (normalized fraction [0.0..1.0])
       const activeMemoryMb =
         this.params.initialMemoryMb * (0.35 + dw * 0.55) +
         (pendingQueueTasks * 0.8) +
         rng.nextGaussian(0, 20);
-      const memUtil = Math.max(
-        10.0,
-        Math.min(99.5, (activeMemoryMb / this.params.maxMemoryMb) * 100)
+      const memFraction = Math.max(
+        0.10,
+        Math.min(0.995, activeMemoryMb / this.params.maxMemoryMb)
       );
+      const memUtil = Number((memFraction * 100).toFixed(2));
 
       // Resource Utilization Variability Vr(t) [normalized 0..1]
       // Simulates imbalance among distributed worker core thread pools
-      let rawVr = 0.15 + (cpuUtil / 100) * 0.35 + rng.nextGaussian(0, 0.04);
-      if (system === 'BASELINE' && pendingQueueTasks > 200) {
-        rawVr += 0.25; // Imbalance amplifies under persistent queue strain in fixed baseline
+      let rawVr = 0.15 + cpuFraction * 0.35 + rng.nextGaussian(0, 0.04);
+      if (pendingQueueTasks > 200) {
+        rawVr += 0.25; // Imbalance amplifies under persistent queue strain identically for both systems
       }
       const vr = Math.max(0.02, Math.min(1.0, rawVr));
 
@@ -151,13 +153,13 @@ export class SimulationEngine {
           this.params.overheadWciCalcSec +
           this.params.overheadMetaAnalysisSec;
 
-        // Dynamic detection tracking for S3 transition surge
+        // Dynamic detection tracking for S3 transition surge (using consistent fraction units)
         if (
           scenario.id === 'S3' &&
           currentStep >= transitionSurgeStep &&
           !dynamicTransitionDetected
         ) {
-          if (wci > this.params.wciHighThreshold || cpuUtil > this.params.cpuHighThreshold) {
+          if (wci >= this.params.wciHighThreshold || cpuFraction >= this.params.cpuHighThreshold) {
             dynamicTransitionDetected = true;
             detectionDelaySec = (currentStep - transitionSurgeStep) * this.params.stepSizeSec;
           }
@@ -168,6 +170,8 @@ export class SimulationEngine {
         let chosenAction: AdaptiveActionType = 'MAINTAIN';
         let actionCost = 0;
         let triggerReason = 'Workload within nominal operating parameters';
+        let decisionCondition = 'None (nominal)';
+        let triggerThreshold = 0;
 
         const prevState = {
           cores: activeCores,
@@ -178,23 +182,42 @@ export class SimulationEngine {
 
         // Check if cooldown has elapsed
         if (stepsSinceLastAdaptation >= this.params.adaptationCooldownSteps) {
+          const isWciHigh = wci >= this.params.wciHighThreshold;
+          const isCpuHigh = cpuFraction >= this.params.cpuHighThreshold;
+
+          const isWciLow = wci <= this.params.wciLowThreshold;
+          const isCpuLow = cpuFraction <= this.params.cpuLowThreshold;
+
+          const isVrHigh = vr >= this.params.varianceThreshold;
+          const isDwHigh = dw >= this.params.dataVolumeThreshold;
+
           // Rule 1: High Workload Pressure -> Scale Up
-          if (
-            (wci >= this.params.wciHighThreshold || cpuUtil >= this.params.cpuHighThreshold) &&
-            activeCores < this.params.maxCores
-          ) {
+          if ((isWciHigh || isCpuHigh) && activeCores < this.params.maxCores) {
             decision = 'TRIGGER_ADAPTATION';
             chosenAction = 'SCALE_UP';
             const coresToAdd = Math.min(2, this.params.maxCores - activeCores);
             activeCores += coresToAdd;
             actionCost = this.params.overheadScaleUpSec;
-            triggerReason = `High complexity (WCI=${wci.toFixed(2)} >= ${this.params.wciHighThreshold}) or CPU saturation (${cpuUtil.toFixed(1)}% >= ${this.params.cpuHighThreshold}%)`;
             stepsSinceLastAdaptation = 0;
+
+            if (isWciHigh && isCpuHigh) {
+              triggerThreshold = this.params.wciHighThreshold;
+              decisionCondition = `WCI (${wci.toFixed(4)}) >= ${this.params.wciHighThreshold} AND CPU (${cpuUtil.toFixed(1)}%) >= ${(this.params.cpuHighThreshold * 100).toFixed(1)}%`;
+              triggerReason = `High complexity (WCI=${wci.toFixed(2)} >= ${this.params.wciHighThreshold}) and CPU saturation (${cpuUtil.toFixed(1)}% >= ${(this.params.cpuHighThreshold * 100).toFixed(1)}%)`;
+            } else if (isWciHigh) {
+              triggerThreshold = this.params.wciHighThreshold;
+              decisionCondition = `WCI (${wci.toFixed(4)}) >= ${this.params.wciHighThreshold}`;
+              triggerReason = `High complexity: WCI=${wci.toFixed(2)} >= ${this.params.wciHighThreshold}`;
+            } else {
+              triggerThreshold = this.params.cpuHighThreshold;
+              decisionCondition = `CPU (${cpuUtil.toFixed(1)}%) >= ${(this.params.cpuHighThreshold * 100).toFixed(1)}%`;
+              triggerReason = `CPU saturation: ${cpuUtil.toFixed(1)}% >= ${(this.params.cpuHighThreshold * 100).toFixed(1)}%`;
+            }
           }
           // Rule 2: Low Workload Pressure -> Scale Down to Conserve Resources
           else if (
-            wci <= this.params.wciLowThreshold &&
-            cpuUtil <= this.params.cpuLowThreshold &&
+            isWciLow &&
+            isCpuLow &&
             activeCores > this.params.minCores &&
             pendingQueueTasks < 20
           ) {
@@ -203,25 +226,32 @@ export class SimulationEngine {
             const coresToRemove = Math.min(2, activeCores - this.params.minCores);
             activeCores -= coresToRemove;
             actionCost = this.params.overheadScaleDownSec;
-            triggerReason = `Low complexity (WCI=${wci.toFixed(2)} <= ${this.params.wciLowThreshold}) and CPU underutilization (${cpuUtil.toFixed(1)}% <= ${this.params.cpuLowThreshold}%)`;
             stepsSinceLastAdaptation = 0;
+            triggerThreshold = this.params.wciLowThreshold;
+            decisionCondition = `WCI (${wci.toFixed(4)}) <= ${this.params.wciLowThreshold} AND CPU (${cpuUtil.toFixed(1)}%) <= ${(this.params.cpuLowThreshold * 100).toFixed(1)}%`;
+            triggerReason = `Low workload pressure (WCI=${wci.toFixed(2)} <= ${this.params.wciLowThreshold}) and CPU underutilization (${cpuUtil.toFixed(1)}% <= ${(this.params.cpuLowThreshold * 100).toFixed(1)}%)`;
           }
           // Rule 3: High Worker Load Imbalance -> Redistribute Workload
-          else if (vr >= this.params.varianceThreshold && pendingQueueTasks > 40) {
+          else if (isVrHigh && pendingQueueTasks > 40) {
             decision = 'TRIGGER_ADAPTATION';
             chosenAction = 'REDISTRIBUTE_WORKLOAD';
             actionCost = this.params.overheadRedistributeSec;
-            triggerReason = `Core load variance exceeds threshold (Vr=${vr.toFixed(2)} >= ${this.params.varianceThreshold})`;
             stepsSinceLastAdaptation = 0;
+            triggerThreshold = this.params.varianceThreshold;
+            decisionCondition = `Vr (${vr.toFixed(4)}) >= ${this.params.varianceThreshold} AND queueLength (${pendingQueueTasks}) > 40`;
+            triggerReason = `Core load variance exceeds threshold (Vr=${vr.toFixed(2)} >= ${this.params.varianceThreshold}) with queue backlog (${pendingQueueTasks} tasks)`;
           }
           // Rule 4: High Data Volume / Memory Pressure -> Parameter Adjustment
-          else if (dw >= this.params.dataVolumeThreshold && batchSize > 16) {
+          else if (isDwHigh && batchSize > 16) {
             decision = 'TRIGGER_ADAPTATION';
             chosenAction = 'ADJUST_PARAMETERS';
+            const oldBatch = batchSize;
             batchSize = Math.max(16, batchSize - 8); // Throttles memory footprint
             actionCost = this.params.overheadParamAdjustSec;
-            triggerReason = `Data intensity elevated (Dw=${dw.toFixed(2)} >= ${this.params.dataVolumeThreshold}), throttling batch size`;
             stepsSinceLastAdaptation = 0;
+            triggerThreshold = this.params.dataVolumeThreshold;
+            decisionCondition = `Dw (${dw.toFixed(4)}) >= ${this.params.dataVolumeThreshold} AND batchSize (${oldBatch}) > 16`;
+            triggerReason = `Data volume intensity elevated (Dw=${dw.toFixed(2)} >= ${this.params.dataVolumeThreshold}), throttling batch size (${oldBatch} -> ${batchSize})`;
           }
         }
 
@@ -243,12 +273,15 @@ export class SimulationEngine {
             step: currentStep,
             simTimeSec: Number(simTimeSec.toFixed(2)),
             scenarioId: scenario.id,
+            system,
             runId,
             seed,
             wci,
+            threshold: triggerThreshold,
             currentWorkloadIntensity: cw,
             currentResourceAllocation: activeCores,
             decision,
+            decisionCondition,
             action: chosenAction,
             previousState: prevState,
             updatedState: {
@@ -269,7 +302,7 @@ export class SimulationEngine {
       if (scenario.id === 'S3' && currentStep >= transitionSurgeStep) {
         postTransitionSteps++;
         if (!isStabilized && postTransitionSteps > 5) {
-          if (cpuUtil < 80.0 && pendingQueueTasks < 80) {
+          if (cpuFraction < 0.80 && pendingQueueTasks < 80) {
             isStabilized = true;
             stabilizationTimeSec = postTransitionSteps * this.params.stepSizeSec;
           }

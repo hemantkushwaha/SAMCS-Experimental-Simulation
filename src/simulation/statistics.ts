@@ -48,35 +48,85 @@ export function calculateSummary(values: number[]): StatisticalMetricSummary {
 }
 
 /**
- * Standard Normal CDF approximation (Abramowitz & Stegun)
+ * Log Gamma function using Lanczos approximation (g=7, 9 coefficients)
  */
-function standardNormalCdf(z: number): number {
-  const b1 = 0.31938153;
-  const b2 = -0.356563782;
-  const b3 = 1.781477937;
-  const b4 = -1.821255978;
-  const b5 = 1.330274429;
-  const p = 0.2316419;
-  const c = 0.39894228;
-
-  if (z >= 0.0) {
-    const t = 1.0 / (1.0 + p * z);
-    return (
-      1.0 -
-      c *
-        Math.exp((-z * z) / 2.0) *
-        t *
-        (t * (t * (t * (t * b5 + b4) + b3) + b2) + b1)
-    );
-  } else {
-    const t = 1.0 / (1.0 - p * z);
-    return (
-      c *
-      Math.exp((-z * z) / 2.0) *
-      t *
-      (t * (t * (t * (t * b5 + b4) + b3) + b2) + b1)
-    );
+function logGamma(z: number): number {
+  const g = 7;
+  const C = [
+    0.99999999999980993,
+    676.52036812188514,
+    -1259.1392167224028,
+    771.32342877765313,
+    -176.61502916214059,
+    12.507343278686905,
+    -0.13857109583115912,
+    9.9843695780195716e-6,
+    1.5056327351493116e-7,
+  ];
+  if (z < 0.5) {
+    return Math.log(Math.PI / Math.sin(Math.PI * z)) - logGamma(1 - z);
   }
+  z -= 1;
+  let base = C[0];
+  for (let i = 1; i < g + 2; i++) {
+    base += C[i] / (z + i);
+  }
+  const t = z + g + 0.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(base);
+}
+
+/**
+ * Regularized incomplete beta function I_x(a, b) via modified Lentz method
+ */
+function regularizedIncompleteBeta(a: number, b: number, x: number): number {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+
+  const lbeta = logGamma(a) + logGamma(b) - logGamma(a + b);
+  const front = Math.exp(Math.log(x) * a + Math.log(1 - x) * b - lbeta);
+
+  const fEps = 1e-15;
+  let f = 1.0;
+  let c = 1.0;
+  let d = 0.0;
+
+  for (let m = 0; m <= 200; m++) {
+    let numerator: number;
+    if (m === 0) {
+      numerator = 1.0;
+    } else if (m % 2 === 0) {
+      const k = m / 2;
+      numerator = (k * (b - k) * x) / ((a + 2 * k - 1) * (a + 2 * k));
+    } else {
+      const k = (m - 1) / 2;
+      numerator = -((a + k) * (a + b + k) * x) / ((a + 2 * k) * (a + 2 * k + 1));
+    }
+
+    d = 1.0 + numerator * d;
+    if (Math.abs(d) < fEps) d = fEps;
+    c = 1.0 + numerator / c;
+    if (Math.abs(c) < fEps) c = fEps;
+    d = 1.0 / d;
+    const delta = c * d;
+    f *= delta;
+    if (Math.abs(delta - 1.0) < fEps) break;
+  }
+
+  return (front * (f - 1.0)) / a;
+}
+
+/**
+ * Exact two-tailed p-value for Student's t-distribution with df degrees of freedom
+ */
+export function calculateStudentTPValue(tStat: number, df: number): number {
+  if (df <= 0) return 1.0;
+  const absT = Math.abs(tStat);
+  if (absT === 0) return 1.0;
+  const x = df / (df + absT * absT);
+  if (x >= 1) return 1.0;
+  if (x <= 0) return 0.0;
+  const p = regularizedIncompleteBeta(df / 2, 0.5, x);
+  return Math.max(0, Math.min(1.0, p));
 }
 
 /**
@@ -105,10 +155,22 @@ export function performPairedTTest(
   const tStat = stdError > 1e-9 ? diffMean / stdError : 0;
   const df = n - 1;
 
-  // Approximate two-tailed p-value using Hill's approximation for Student's t
-  const x = tStat * Math.sqrt((df - 0.5) / (df + Math.pow(tStat, 2) / 2));
-  const normP = standardNormalCdf(Math.abs(x));
-  const pValue = Math.max(1e-6, Math.min(1.0, 2 * (1.0 - normP)));
+  // Exact two-tailed p-value calculation
+  const pValue = calculateStudentTPValue(tStat, df);
+
+  // Format p-value rigorously: do not round to 0, use scientific notation or bounded string
+  let pValueFormatted: string;
+  if (pValue < 1e-6) {
+    pValueFormatted = pValue < 1e-15 ? 'p < 1e-15' : `p = ${pValue.toExponential(2)}`;
+  } else {
+    pValueFormatted = `p = ${pValue.toFixed(6)}`;
+  }
+
+  // 95% Confidence Interval for mean difference
+  // For df=29, tCrit at alpha=0.05 is 2.0452
+  const tCrit = df === 29 ? 2.0452 : 2.0;
+  const ci95DiffLow = Number((diffMean - tCrit * stdError).toFixed(4));
+  const ci95DiffHigh = Number((diffMean + tCrit * stdError).toFixed(4));
 
   // Means & Pooled Std Dev for Cohen's d
   const baseSummary = calculateSummary(baseline);
@@ -128,14 +190,18 @@ export function performPairedTTest(
   return {
     scenarioId,
     metric: metricName,
+    sampleSize: n,
     baselineMean: baseSummary.mean,
     samcsMean: samcsSummary.mean,
     percentImprovement: Number(percentImprovement.toFixed(2)),
     testName: "Paired Two-Tailed Student's t-test",
     testStatistic: Number(tStat.toFixed(4)),
-    pValue: Number(pValue.toFixed(6)),
+    pValue: pValue,
+    pValueFormatted,
     degreesOfFreedom: df,
     cohensD: Number(cohensD.toFixed(3)),
+    ci95DiffLow,
+    ci95DiffHigh,
     isSignificant: pValue < 0.05,
   };
 }
