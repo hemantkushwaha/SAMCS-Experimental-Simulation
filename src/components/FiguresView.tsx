@@ -131,7 +131,14 @@ export const FiguresView: React.FC<FiguresViewProps> = ({ data }) => {
               const samcsCiLowY = 250 - (samcs.executionTime.ci95Low / 150) * 210;
               const samcsCiHighY = 250 - (samcs.executionTime.ci95High / 150) * 210;
 
-              const delta = (((baseMean - samcsMean) / baseMean) * 100).toFixed(1);
+              const isOverhead = samcsMean > baseMean;
+              const diffPct = isOverhead
+                ? (((samcsMean - baseMean) / baseMean) * 100).toFixed(1)
+                : (((baseMean - samcsMean) / baseMean) * 100).toFixed(1);
+
+              const badgeText = isOverhead
+                ? `+${diffPct}% Latency Overhead`
+                : `${diffPct}% Lower Execution Time`;
 
               return (
                 <g key={label}>
@@ -176,10 +183,27 @@ export const FiguresView: React.FC<FiguresViewProps> = ({ data }) => {
                     {samcsMean.toFixed(1)}s
                   </text>
 
-                  {/* Percentage badge */}
-                  <rect x={xGroup - 25} y="282" width="50" height="15" rx="3" fill="#1e1b4b" stroke="#4338ca" strokeWidth="0.8" />
-                  <text x={xGroup} y="293" fill="#34d399" fontSize="9" textAnchor="middle" fontFamily="monospace" fontWeight="600">
-                    -{delta}%
+                  {/* Execution-time comparison badge */}
+                  <rect
+                    x={xGroup - 76}
+                    y="280"
+                    width="152"
+                    height="16"
+                    rx="3"
+                    fill={isOverhead ? '#31131b' : '#064e3b'}
+                    stroke={isOverhead ? '#e11d48' : '#059669'}
+                    strokeWidth="0.8"
+                  />
+                  <text
+                    x={xGroup}
+                    y="291.5"
+                    fill={isOverhead ? '#fda4af' : '#34d399'}
+                    fontSize="8.5"
+                    textAnchor="middle"
+                    fontFamily="monospace"
+                    fontWeight="600"
+                  >
+                    {badgeText}
                   </text>
                 </g>
               );
@@ -836,8 +860,8 @@ export const FiguresView: React.FC<FiguresViewProps> = ({ data }) => {
 
         <div className="w-full overflow-x-auto">
           <svg viewBox="0 0 760 270" className="w-full min-w-[640px] h-64">
-            {[0, 2, 4, 6, 8, 10, 12].map((val) => {
-              const y = 220 - (val / 12) * 180;
+            {[0, 500, 1000, 1500, 2000].map((val) => {
+              const y = 220 - (val / 2000) * 180;
               return (
                 <g key={val}>
                   <line x1="60" y1={y} x2="710" y2={y} stroke="#334155" strokeWidth="0.6" strokeDasharray="3 3" />
@@ -861,9 +885,9 @@ export const FiguresView: React.FC<FiguresViewProps> = ({ data }) => {
               { label: 'S3: Dynamic Multi-Phase', base: s3Base?.efficiency, samcs: s3Samcs?.efficiency, x: 600 },
             ].map(({ label, base, samcs, x }) => {
               if (!base || !samcs) return null;
-              const baseH = (base.mean / 12) * 180;
+              const baseH = (base.mean / 2000) * 180;
               const baseY = 220 - baseH;
-              const samcsH = (samcs.mean / 12) * 180;
+              const samcsH = (samcs.mean / 2000) * 180;
               const samcsY = 220 - samcsH;
 
               const delta = (((samcs.mean - base.mean) / base.mean) * 100).toFixed(1);
